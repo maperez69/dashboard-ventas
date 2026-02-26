@@ -219,18 +219,29 @@ useEffect(() => {
 >
   Reset
 </button>
-        <div className="bg-white p-6 rounded-2xl mb-5 shadow-[0_2px_8px_rgba(0,0,0,0.08)] flex justify-between items-center flex-wrap gap-4">
-          <div>
-            <h1 className="text-[28px] font-extrabold text-[#1d1d1f] tracking-tight mb-1">MOS Dashboard</h1>
-            <p className="text-[#86868b] text-[14px]">Reporte de Ventas CRM (Odoo)</p>
-          </div>
+<div className="flex items-center gap-3">
+  <label className="cursor-pointer px-5 py-2.5 rounded-xl border border-[#d2d2d7] bg-white font-semibold text-[14px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-all flex items-center gap-2 whitespace-nowrap">
+    <UploadCloud size={18} />
+    Cargar CSV (Mes Nuevo)
+    <input
+      type="file"
+      accept=".csv"
+      className="hidden"
+      onChange={handleFileUpload}
+    />
+  </label>
 
-          <label className="cursor-pointer px-5 py-2.5 rounded-xl border border-[#d2d2d7] bg-white font-semibold text-[14px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-all flex items-center gap-2 whitespace-nowrap">
-            <UploadCloud size={18} />
-            Cargar CSV (Mes Nuevo)
-            <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
-          </label>
-        </div>
+  <button
+    onClick={() => {
+      if (!confirm("¿Resetear datos cargados y volver al baseline?")) return;
+      setData(BASE_DATA);
+      localStorage.removeItem(STORAGE_KEY);
+    }}
+    className="px-5 py-2.5 rounded-xl border border-[#d2d2d7] bg-white font-semibold text-[14px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-all whitespace-nowrap"
+  >
+    Reset
+  </button>
+</div>
 
         {/* FILTROS: MES */}
         <div className="flex gap-3 mb-4 overflow-x-auto pb-2 custom-scrollbar">
