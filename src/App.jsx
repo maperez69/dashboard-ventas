@@ -15,6 +15,8 @@ import { ENERO_2026_DATA } from "./data/enero2026Data";
 import { mesCorto, monthKey, normalizeText } from "./lib/meses";
 import { normalizeRow, parseCSVFile } from "./lib/csv";
 
+const BASE_DATA = [...MOCK_DATA, ...(ENERO_2026_DATA || [])].map(normalizeRow);
+const STORAGE_KEY = "mos_data_v1";
 const MOCK_DATA = [
   { mes: "Noviembre 2025", sucursal: "Buenavista", linea: "Medicina Estética", vendedora: "Mar Campos", precioTotal: 400000, cantidad: 120 },
   { mes: "Noviembre 2025", sucursal: "Buenavista", linea: "Aparatología", vendedora: "Aura Castro", precioTotal: 322637, cantidad: 80 },
@@ -38,9 +40,19 @@ const formatMoneda = (val) =>
 const formatPercent = (val) => `${val >= 0 ? "+" : ""}${Number(val).toFixed(1)}%`;
 
 export default function App() {
-  const [data, setData] = useState(() =>
-    [...MOCK_DATA, ...(ENERO_2026_DATA || [])].map(normalizeRow)
-  );
+const [data, setData] = useState(() => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return BASE_DATA;
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return BASE_DATA;
+
+    return parsed.map(normalizeRow);
+  } catch {
+    return BASE_DATA;
+  }
+});
 
   const [mes, setMes] = useState("Enero 2026");
   const [sucursal, setSucursal] = useState("Todas");
@@ -154,10 +166,13 @@ export default function App() {
     return [...new Set(all.map((d) => normalizeText(d[key])))].filter(Boolean).sort();
   }, [data, sucursal, analisisTipo]);
 
-  useEffect(() => {
-    if (!opcionesAnalisis.length) return;
-    if (!analisisItem || !opcionesAnalisis.includes(analisisItem)) setAnalisisItem(opcionesAnalisis[0]);
-  }, [opcionesAnalisis, analisisItem]);
+useEffect(() => {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch {
+    // si el storage está lleno o bloqueado, no rompemos la app
+  }
+}, [data]);
 
   const analisisData = useMemo(() => {
     if (!analisisItem) return null;
@@ -194,6 +209,16 @@ export default function App() {
     <div className="min-h-screen bg-[#f5f5f7] p-3 md:p-5 font-sans text-[#1d1d1f]">
       <div className="max-w-[1200px] mx-auto">
         {/* HEADER */}
+<button
+  onClick={() => {
+    if (!confirm("¿Resetear datos cargados y volver al baseline?")) return;
+    setData(BASE_DATA);
+    localStorage.removeItem(STORAGE_KEY);
+  }}
+  className="px-5 py-2.5 rounded-xl border border-[#d2d2d7] bg-white font-semibold text-[14px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-all whitespace-nowrap"
+>
+  Reset
+</button>
         <div className="bg-white p-6 rounded-2xl mb-5 shadow-[0_2px_8px_rgba(0,0,0,0.08)] flex justify-between items-center flex-wrap gap-4">
           <div>
             <h1 className="text-[28px] font-extrabold text-[#1d1d1f] tracking-tight mb-1">MOS Dashboard</h1>
