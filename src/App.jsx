@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import Papa from "papaparse";
 import {
   AreaChart,
   Area,
@@ -10,97 +11,254 @@ import {
 } from "recharts";
 import { UploadCloud } from "lucide-react";
 
-import KpiCard from "./components/KpiCard";
-import { ENERO_2026_DATA } from "./data/enero2026Data";
-import { mesCorto, monthKey, normalizeText } from "./lib/meses";
-import { normalizeRow, parseCSVFile } from "./lib/csv";
+import { enero2026Data } from "./data/enero2026Data";
+import { octubre2025Data } from "./data/octubre2025Data";
 
-const BASE_DATA = [...MOCK_DATA, ...(ENERO_2026_DATA || [])].map(normalizeRow);
+/** =========================
+ *  CONFIG
+ *  ========================= */
 const STORAGE_KEY = "mos_data_v1";
-const MOCK_DATA = [
-  { mes: "Noviembre 2025", sucursal: "Buenavista", linea: "Medicina Estética", vendedora: "Mar Campos", precioTotal: 400000, cantidad: 120 },
-  { mes: "Noviembre 2025", sucursal: "Buenavista", linea: "Aparatología", vendedora: "Aura Castro", precioTotal: 322637, cantidad: 80 },
-  { mes: "Noviembre 2025", sucursal: "Masaryk", linea: "Medicina Estética", vendedora: "Paulina", precioTotal: 300000, cantidad: 95 },
-  { mes: "Noviembre 2025", sucursal: "Masaryk", linea: "Farmacia", vendedora: "Ana Gabriela", precioTotal: 272344, cantidad: 200 },
 
-  { mes: "Diciembre 2025", sucursal: "Buenavista", linea: "Medicina Estética", vendedora: "Mar Campos", precioTotal: 450000, cantidad: 110 },
-  { mes: "Diciembre 2025", sucursal: "Buenavista", linea: "Aparatología", vendedora: "Aura Castro", precioTotal: 333083, cantidad: 70 },
-  { mes: "Diciembre 2025", sucursal: "Masaryk", linea: "Inyectables", vendedora: "Paulina", precioTotal: 200000, cantidad: 85 },
-  { mes: "Diciembre 2025", sucursal: "Masaryk", linea: "Cosmetología", vendedora: "Ana Gabriela", precioTotal: 105361, cantidad: 150 },
-];
+const MONTHS_ES = {
+  enero: 1,
+  febrero: 2,
+  marzo: 3,
+  abril: 4,
+  mayo: 5,
+  junio: 6,
+  julio: 7,
+  agosto: 8,
+  septiembre: 9,
+  setiembre: 9,
+  octubre: 10,
+  noviembre: 11,
+  diciembre: 12,
+};
 
-const formatMoneda = (val) =>
-  new Intl.NumberFormat("es-MX", {
+const MONTH_ABBR = {
+  1: "Ene",
+  2: "Feb",
+  3: "Mar",
+  4: "Abr",
+  5: "May",
+  6: "Jun",
+  7: "Jul",
+  8: "Ago",
+  9: "Sep",
+  10: "Oct",
+  11: "Nov",
+  12: "Dic",
+};
+
+const SUCURSALES = ["Todas", "Buenavista", "Masaryk"];
+
+/** =========================
+ *  HELPERS
+ *  ========================= */
+function normalizeText(s) {
+  return String(s ?? "")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function toNumber(x) {
+  if (x === null || x === undefined) return 0;
+  const s = String(x)
+    .replace(/\$/g, "")
+    .replace(/,/g, "")
+    .trim();
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * "Enero 2026" -> { y: 2026, m: 1, key: "2026-01" }
+ */
+function parseMesLabel(mesLabel) {
+  const raw = normalizeText(mesLabel).toLowerCase();
+  const parts = raw.split(" ");
+  // acepta "Enero 2026" / "Enero-2026" / "Enero_2026"
+  const tokens = raw.replace(/[-_]/g, " ").split(" ").filter(Boolean);
+  const monthName = tokens[0] || "";
+  const yearStr = tokens.find((t) => /^\d{4}$/.test(t)) || "";
+  const y = Number(yearStr) || 0;
+  const m = MONTHS_ES[monthName] || 0;
+  const key = y && m ? `${y}-${String(m).padStart(2, "0")}` : "0000-00";
+  return { y, m, key };
+}
+
+function monthButtonLabel(mesLabel) {
+  const { y, m } = parseMesLabel(mesLabel);
+  if (!y || !m) return mesLabel;
+  return `${MONTH_ABBR[m]} ${String(y).slice(-2)}`; // Oct 25, Ene 26
+}
+
+/**
+ * Dedupe key por fila: mes|sucursal|linea|vendedora|precioTotal|cantidad
+ * (si vuelves a subir el mismo CSV, no duplica)
+ */
+function rowKey(r) {
+  return [
+    normalizeText(r.mes).toLowerCase(),
+    normalizeText(r.sucursal).toLowerCase(),
+    normalizeText(r.linea).toLowerCase(),
+    normalizeText(r.vendedora).toLowerCase(),
+    String(Number(r.precioTotal || 0)),
+    String(Number(r.cantidad || 0)),
+  ].join("|");
+}
+
+function formatMoneda(val) {
+  return new Intl.NumberFormat("es-MX", {
     style: "currency",
     currency: "MXN",
-    minimumFractionDigits: 1,
-    maximumFractionDigits: 1,
-  }).format(Number(val) || 0);
+    minimumFractionDigits: 0,
+  }).format(val || 0);
+}
 
-const formatPercent = (val) => `${val >= 0 ? "+" : ""}${Number(val).toFixed(1)}%`;
+function formatPercent(val) {
+  if (val === null || val === undefined) return "N/A";
+  const sign = val >= 0 ? "+" : "";
+  return `${sign}${val.toFixed(1)}%`;
+}
 
+/** =========================
+ *  BASELINE DATA
+ *  ========================= */
+const BASE_DATA = [
+  ...octubre2025Data,
+  // si tienes noviembre/diciembre como data files también, agrégalos aquí
+  ...enero2026Data,
+];
+
+/** =========================
+ *  APP
+ *  ========================= */
 export default function App() {
-const [data, setData] = useState(() => {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return BASE_DATA;
+  // 1) Data (persistente)
+  const [data, setData] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (!saved) return BASE_DATA;
+      const parsed = JSON.parse(saved);
+      if (!Array.isArray(parsed)) return BASE_DATA;
+      return parsed;
+    } catch {
+      return BASE_DATA;
+    }
+  });
 
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed) || parsed.length === 0) return BASE_DATA;
-
-    return parsed.map(normalizeRow);
-  } catch {
-    return BASE_DATA;
-  }
-});
-
-  const [mes, setMes] = useState("Enero 2026");
-  const [sucursal, setSucursal] = useState("Todas");
-
-  const [tab, setTab] = useState("departamentos"); // departamentos | vendedoras | analisis
-  const [analisisTipo, setAnalisisTipo] = useState("departamento"); // departamento | vendedora
-  const [analisisItem, setAnalisisItem] = useState("");
-
-  const mesesDisponibles = useMemo(() => {
-    return [...new Set(data.map((d) => normalizeText(d.mes)))]
-      .filter(Boolean)
-      .sort((a, b) => monthKey(a).localeCompare(monthKey(b)));
+  // persist
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    } catch {
+      // si localStorage falla, no truena la app
+    }
   }, [data]);
 
+  // 2) Meses disponibles (ordenados por fecha real)
+  const mesesDisponibles = useMemo(() => {
+    const unique = Array.from(new Set(data.map((d) => d.mes))).filter(Boolean);
+    unique.sort((a, b) => {
+      const A = parseMesLabel(a).key;
+      const B = parseMesLabel(b).key;
+      return A.localeCompare(B);
+    });
+    return unique;
+  }, [data]);
+
+  // 3) Filtros
+  const [mes, setMes] = useState(() => {
+    // default: último mes disponible
+    if (BASE_DATA.length === 0) return "";
+    const unique = Array.from(new Set(BASE_DATA.map((d) => d.mes))).filter(Boolean);
+    unique.sort((a, b) => parseMesLabel(a).key.localeCompare(parseMesLabel(b).key));
+    return unique[unique.length - 1] || "";
+  });
+  const [sucursal, setSucursal] = useState("Todas");
+
+  // asegura mes válido
   useEffect(() => {
     if (!mesesDisponibles.length) return;
-    if (!mesesDisponibles.includes(mes)) setMes(mesesDisponibles[mesesDisponibles.length - 1]);
+    if (!mesesDisponibles.includes(mes)) {
+      setMes(mesesDisponibles[mesesDisponibles.length - 1]);
+    }
   }, [mesesDisponibles, mes]);
 
+  // 4) Upload CSV (robusto)
   const handleFileUpload = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    parseCSVFile(file, {
-      onSuccess: (parsed) => {
-        // REEMPLAZA meses existentes (evita duplicados)
-        setData((prev) => {
-          const nuevosMeses = new Set(parsed.map((p) => p.mes));
-          const sinEsosMeses = prev.filter((p) => !nuevosMeses.has(p.mes));
-          return [...sinEsosMeses, ...parsed].map(normalizeRow);
-        });
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => {
+        const rows = Array.isArray(results.data) ? results.data : [];
 
-        const mesesSubidos = [...new Set(parsed.map((p) => p.mes))].sort((a, b) =>
-          monthKey(a).localeCompare(monthKey(b))
-        );
-        setMes(mesesSubidos[mesesSubidos.length - 1]);
+        // Mapeo flexible de headers (por si vienen con mayúsculas/acentos)
+        const pick = (obj, keys) => {
+          for (const k of keys) {
+            if (obj[k] !== undefined) return obj[k];
+          }
+          return "";
+        };
 
-        e.target.value = "";
+        const parsed = rows
+          .map((r) => {
+            const mesVal = pick(r, ["Mes", "mes"]);
+            const sucVal = pick(r, ["Sucursal", "sucursal"]);
+            const linVal = pick(r, ["Linea", "Línea", "linea", "línea"]);
+            const venVal = pick(r, ["Vendedora", "vendedora"]);
+            const ptVal = pick(r, ["Precio Total", "precioTotal", "precio total", "Total", "total"]);
+            const cVal = pick(r, ["Cantidad", "cantidad", "Qty", "qty"]);
+
+            const item = {
+              mes: normalizeText(mesVal),
+              sucursal: normalizeText(sucVal),
+              linea: normalizeText(linVal),
+              vendedora: normalizeText(venVal),
+              precioTotal: toNumber(ptVal),
+              cantidad: toNumber(cVal),
+            };
+
+            // filtros mínimos
+            if (!item.mes || !item.sucursal || !item.linea) return null;
+            if (item.precioTotal <= 0) return null;
+
+            return item;
+          })
+          .filter(Boolean);
+
+        if (!parsed.length) return;
+
+        // dedupe contra lo existente + dentro del mismo upload
+        const existing = new Set(data.map(rowKey));
+        const next = [...data];
+
+        for (const r of parsed) {
+          const k = rowKey(r);
+          if (existing.has(k)) continue;
+          existing.add(k);
+          next.push(r);
+        }
+
+        setData(next);
       },
-      onError: (msg) => alert(msg),
+      error: () => {
+        // si falla parseo, no revientes UI
+      },
     });
+
+    // permitir re-subir el mismo archivo
+    e.target.value = "";
   };
 
+  // 5) Data filtrada por mes/sucursal
   const dataMesActual = useMemo(() => {
     return data.filter(
-      (d) =>
-        normalizeText(d.mes) === mes &&
-        (sucursal === "Todas" || normalizeText(d.sucursal) === sucursal)
+      (d) => d.mes === mes && (sucursal === "Todas" || d.sucursal === sucursal)
     );
   }, [data, mes, sucursal]);
 
@@ -109,139 +267,71 @@ const [data, setData] = useState(() => {
     if (idx <= 0) return [];
     const mesAnt = mesesDisponibles[idx - 1];
     return data.filter(
-      (d) =>
-        normalizeText(d.mes) === mesAnt &&
-        (sucursal === "Todas" || normalizeText(d.sucursal) === sucursal)
+      (d) => d.mes === mesAnt && (sucursal === "Todas" || d.sucursal === sucursal)
     );
   }, [data, mes, sucursal, mesesDisponibles]);
 
+  // 6) KPIs
   const kpis = useMemo(() => {
-    const currentTotal = dataMesActual.reduce((acc, d) => acc + d.precioTotal, 0);
-    const prevTotal = dataMesAnterior.reduce((acc, d) => acc + d.precioTotal, 0);
-    const currentQty = dataMesActual.reduce((acc, d) => acc + d.cantidad, 0);
-    const growth = prevTotal > 0 ? ((currentTotal - prevTotal) / prevTotal) * 100 : null;
+    const total = dataMesActual.reduce((acc, d) => acc + (d.precioTotal || 0), 0);
+    const prev = dataMesAnterior.reduce((acc, d) => acc + (d.precioTotal || 0), 0);
+    const tx = dataMesActual.reduce((acc, d) => acc + (d.cantidad || 0), 0);
+    const growth = prev > 0 ? ((total - prev) / prev) * 100 : null;
+    const ticket = tx > 0 ? total / tx : 0;
 
-    return {
-      total: currentTotal,
-      growth,
-      ticket: currentQty > 0 ? currentTotal / currentQty : 0,
-      tx: currentQty,
-    };
+    return { total, prev, tx, growth, ticket };
   }, [dataMesActual, dataMesAnterior]);
 
+  // 7) Evolución
   const dataEvolucion = useMemo(() => {
-    return mesesDisponibles.map((m) => {
+    return mesesDisponibles.map((mLabel) => {
       const mData = data.filter(
-        (d) =>
-          normalizeText(d.mes) === m &&
-          (sucursal === "Todas" || normalizeText(d.sucursal) === sucursal)
+        (d) => d.mes === mLabel && (sucursal === "Todas" || d.sucursal === sucursal)
       );
       return {
-        mes: m,
-        label: mesCorto(m), // Ene, Feb, Mar...
-        total: mData.reduce((acc, d) => acc + d.precioTotal, 0),
+        mes: mLabel,
+        label: monthButtonLabel(mLabel).split(" ")[0], // "Oct", "Ene" en el eje
+        total: mData.reduce((acc, d) => acc + (d.precioTotal || 0), 0),
       };
     });
-  }, [data, sucursal, mesesDisponibles]);
+  }, [data, mesesDisponibles, sucursal]);
 
-  const dataBreakdown = useMemo(() => {
-    const key = tab === "departamentos" ? "linea" : "vendedora";
-    const agrupado = {};
-    dataMesActual.forEach((d) => {
-      const k = normalizeText(d[key]) || "Sin dato";
-      agrupado[k] = (agrupado[k] || 0) + d.precioTotal;
-    });
-
-    const arr = Object.entries(agrupado)
-      .map(([name, value]) => ({ name, value }))
-      .sort((a, b) => b.value - a.value);
-
-    const max = arr[0]?.value || 1;
-    return arr.map((a) => ({ ...a, percent: (a.value / max) * 100 }));
-  }, [dataMesActual, tab]);
-
-  const opcionesAnalisis = useMemo(() => {
-    const key = analisisTipo === "departamento" ? "linea" : "vendedora";
-    const all = data.filter((d) => sucursal === "Todas" || normalizeText(d.sucursal) === sucursal);
-    return [...new Set(all.map((d) => normalizeText(d[key])))].filter(Boolean).sort();
-  }, [data, sucursal, analisisTipo]);
-
-useEffect(() => {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch {
-    // si el storage está lleno o bloqueado, no rompemos la app
-  }
-}, [data]);
-
-  const analisisData = useMemo(() => {
-    if (!analisisItem) return null;
-
-    const key = analisisTipo === "departamento" ? "linea" : "vendedora";
-    const evo = mesesDisponibles.map((m) => {
-      const mData = data.filter(
-        (d) =>
-          normalizeText(d.mes) === m &&
-          normalizeText(d[key]) === analisisItem &&
-          (sucursal === "Todas" || normalizeText(d.sucursal) === sucursal)
-      );
-      return {
-        mes: m,
-        label: mesCorto(m),
-        total: mData.reduce((acc, d) => acc + d.precioTotal, 0),
-      };
-    });
-
-    const vals = evo.map((i) => i.total);
-    if (!vals.length) return null;
-
-    const maxVal = Math.max(...vals);
-    const minVal = Math.min(...vals);
-    const maxMes = evo.find((i) => i.total === maxVal)?.mes || "";
-    const minMes = evo.find((i) => i.total === minVal)?.mes || "";
-    const promedio = vals.reduce((a, b) => a + b, 0) / vals.length || 0;
-    const tendencia = vals[0] > 0 ? ((vals[vals.length - 1] - vals[0]) / vals[0]) * 100 : 0;
-
-    return { evo, maxVal, minVal, maxMes, minMes, promedio, tendencia };
-  }, [data, mesesDisponibles, sucursal, analisisTipo, analisisItem]);
+  // Reset baseline
+  const handleReset = () => {
+    if (!confirm("¿Resetear datos cargados y volver al baseline?")) return;
+    setData(BASE_DATA);
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {}
+  };
 
   return (
     <div className="min-h-screen bg-[#f5f5f7] p-3 md:p-5 font-sans text-[#1d1d1f]">
       <div className="max-w-[1200px] mx-auto">
         {/* HEADER */}
-<button
-  onClick={() => {
-    if (!confirm("¿Resetear datos cargados y volver al baseline?")) return;
-    setData(BASE_DATA);
-    localStorage.removeItem(STORAGE_KEY);
-  }}
-  className="px-5 py-2.5 rounded-xl border border-[#d2d2d7] bg-white font-semibold text-[14px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-all whitespace-nowrap"
->
-  Reset
-</button>
-<div className="flex items-center gap-3">
-  <label className="cursor-pointer px-5 py-2.5 rounded-xl border border-[#d2d2d7] bg-white font-semibold text-[14px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-all flex items-center gap-2 whitespace-nowrap">
-    <UploadCloud size={18} />
-    Cargar CSV (Mes Nuevo)
-    <input
-      type="file"
-      accept=".csv"
-      className="hidden"
-      onChange={handleFileUpload}
-    />
-  </label>
+        <div className="bg-white p-6 rounded-2xl mb-5 shadow-[0_2px_8px_rgba(0,0,0,0.08)] flex justify-between items-center flex-wrap gap-3">
+          <div>
+            <h1 className="text-[28px] font-extrabold tracking-tight mb-1">
+              MOS Dashboard
+            </h1>
+            <p className="text-[#86868b] text-[14px]">Reporte de Ventas CRM (Odoo)</p>
+          </div>
 
-  <button
-    onClick={() => {
-      if (!confirm("¿Resetear datos cargados y volver al baseline?")) return;
-      setData(BASE_DATA);
-      localStorage.removeItem(STORAGE_KEY);
-    }}
-    className="px-5 py-2.5 rounded-xl border border-[#d2d2d7] bg-white font-semibold text-[14px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-all whitespace-nowrap"
-  >
-    Reset
-  </button>
-</div>
+          <div className="flex gap-2">
+            <label className="cursor-pointer px-5 py-2.5 rounded-xl border border-[#d2d2d7] bg-white font-semibold text-[14px] hover:bg-[#f5f5f7] transition-all flex items-center gap-2 whitespace-nowrap">
+              <UploadCloud size={18} />
+              Cargar CSV (Mes Nuevo)
+              <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
+            </label>
+
+            <button
+              onClick={handleReset}
+              className="px-5 py-2.5 rounded-xl border border-[#d2d2d7] bg-white font-semibold text-[14px] hover:bg-[#f5f5f7] transition-all whitespace-nowrap"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
 
         {/* FILTROS: MES */}
         <div className="flex gap-3 mb-4 overflow-x-auto pb-2 custom-scrollbar">
@@ -250,21 +340,29 @@ useEffect(() => {
               key={m}
               onClick={() => setMes(m)}
               className={`px-5 py-2.5 rounded-xl border font-semibold text-[14px] transition-all whitespace-nowrap
-                ${mes === m ? "bg-[#007aff] text-white border-[#007aff]" : "bg-white text-[#1d1d1f] border-[#d2d2d7] hover:bg-[#f5f5f7]"}`}
+                ${
+                  mes === m
+                    ? "bg-[#007aff] text-white border-[#007aff]"
+                    : "bg-white text-[#1d1d1f] border-[#d2d2d7] hover:bg-[#f5f5f7]"
+                }`}
             >
-              {m}
+              {monthButtonLabel(m)} {/* Oct 25 / Ene 26 */}
             </button>
           ))}
         </div>
 
         {/* FILTROS: SUCURSAL */}
         <div className="flex gap-3 mb-5 overflow-x-auto pb-2 custom-scrollbar">
-          {["Todas", "Buenavista", "Masaryk"].map((s) => (
+          {SUCURSALES.map((s) => (
             <button
               key={s}
               onClick={() => setSucursal(s)}
               className={`px-5 py-2.5 rounded-xl border font-semibold text-[14px] transition-all whitespace-nowrap
-                ${sucursal === s ? "bg-[#007aff] text-white border-[#007aff]" : "bg-white text-[#1d1d1f] border-[#d2d2d7] hover:bg-[#f5f5f7]"}`}
+                ${
+                  sucursal === s
+                    ? "bg-[#007aff] text-white border-[#007aff]"
+                    : "bg-white text-[#1d1d1f] border-[#d2d2d7] hover:bg-[#f5f5f7]"
+                }`}
             >
               {s}
             </button>
@@ -274,14 +372,19 @@ useEffect(() => {
         {/* KPIS */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
           <KpiCard label="Facturación" value={formatMoneda(kpis.total)} />
-          <KpiCard label="Crecimiento" value={kpis.growth !== null ? formatPercent(kpis.growth) : "N/A"} isGrowth growthVal={kpis.growth} />
+          <KpiCard
+            label="Crecimiento"
+            value={kpis.growth !== null ? formatPercent(kpis.growth) : "N/A"}
+            isGrowth
+            growthVal={kpis.growth}
+          />
           <KpiCard label="Ticket Medio" value={formatMoneda(kpis.ticket)} />
-          <KpiCard label="Transacciones" value={Number(kpis.tx || 0).toLocaleString()} />
+          <KpiCard label="Transacciones" value={(kpis.tx || 0).toLocaleString()} />
         </div>
 
         {/* EVOLUCIÓN */}
         <div className="bg-white p-6 rounded-2xl shadow-[0_2px_8px_rgba(0,0,0,0.08)] mb-5">
-          <h2 className="text-[16px] font-bold text-[#1d1d1f] mb-5">Evolución de Ventas</h2>
+          <h2 className="text-[16px] font-bold mb-5">Evolución de Ventas</h2>
           <div className="h-[350px] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={dataEvolucion} margin={{ top: 20, right: 20, left: 0, bottom: 0 }}>
@@ -292,152 +395,70 @@ useEffect(() => {
                   </linearGradient>
                 </defs>
                 <CartesianGrid vertical={false} stroke="#f5f5f7" />
-                <XAxis dataKey="label" axisLine={false} tickLine={false} dy={10} tick={{ fill: "#86868b", fontSize: 14, fontWeight: 600, fontFamily: "sans-serif" }} />
-                <YAxis axisLine={false} tickLine={false} width={70} tick={{ fill: "#86868b", fontSize: 13, fontFamily: "sans-serif" }} tickFormatter={(val) => `$${Math.round(val / 1000)}k`} />
+                <XAxis
+                  dataKey="label"
+                  axisLine={false}
+                  tickLine={false}
+                  dy={10}
+                  tick={{ fill: "#86868b", fontSize: 14, fontWeight: 600, fontFamily: "sans-serif" }}
+                />
+                <YAxis
+                  axisLine={false}
+                  tickLine={false}
+                  width={70}
+                  tick={{ fill: "#86868b", fontSize: 13, fontFamily: "sans-serif" }}
+                  tickFormatter={(val) => `$${Math.round(val / 1000)}k`}
+                />
                 <Tooltip
                   cursor={{ stroke: "#e5e5ea", strokeWidth: 2, strokeDasharray: "5 5" }}
                   contentStyle={{ borderRadius: "12px", border: "none", boxShadow: "0 4px 12px rgba(0,0,0,0.1)" }}
                   formatter={(val) => [formatMoneda(val), "Ventas"]}
-                  labelFormatter={(label, payload) => payload?.[0]?.payload?.mes || label}
                 />
-                <Area type="monotone" dataKey="total" stroke="#007aff" strokeWidth={3} fillOpacity={1} fill="url(#colorTotal)" activeDot={{ r: 6, strokeWidth: 3, stroke: "#fff", fill: "#007aff" }} />
+                <Area
+                  type="monotone"
+                  dataKey="total"
+                  stroke="#007aff"
+                  strokeWidth={3}
+                  fillOpacity={1}
+                  fill="url(#colorTotal)"
+                  activeDot={{ r: 6, strokeWidth: 3, stroke: "#fff", fill: "#007aff" }}
+                />
               </AreaChart>
             </ResponsiveContainer>
           </div>
         </div>
-
-        {/* TABS */}
-        <div className="flex gap-2 mb-5 bg-white p-2 rounded-2xl shadow-[0_2px_8px_rgba(0,0,0,0.08)]">
-          {[
-            { id: "departamentos", label: "Departamentos" },
-            { id: "vendedoras", label: "Vendedoras" },
-            { id: "analisis", label: "Análisis" },
-          ].map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
-              className={`flex-1 py-3 px-2 rounded-xl text-center font-semibold text-[14px] transition-all
-                ${tab === t.id ? "bg-[#007aff] text-white" : "text-[#86868b] hover:bg-[#f5f5f7]"}`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-
-        {/* CONTENIDO */}
-        <div className="bg-white p-6 rounded-2xl shadow-[0_2px_8px_rgba(0,0,0,0.08)]">
-          <h2 className="text-[16px] font-bold text-[#1d1d1f] mb-5">{tab === "analisis" ? "Análisis Profundo" : "Desglose"}</h2>
-
-          {tab !== "analisis" && (
-            <div>
-              {dataBreakdown.length === 0 ? (
-                <div className="p-5 text-center text-[#86868b]">No hay datos para esta selección.</div>
-              ) : (
-                dataBreakdown.map((item, idx) => (
-                  <div key={idx} className="bg-white p-5 rounded-xl mb-3 shadow-[0_1px_4px_rgba(0,0,0,0.06)] border border-slate-50">
-                    <div className="flex justify-between items-center mb-3">
-                      <div className="font-semibold text-[15px] text-[#1d1d1f]">{item.name}</div>
-                      <div className="font-bold text-[16px] text-[#007aff]">{formatMoneda(item.value)}</div>
-                    </div>
-                    <div className="h-1.5 bg-[#f5f5f7] rounded-full overflow-hidden">
-                      <div className="h-full bg-gradient-to-r from-[#007aff] to-[#0051d5] transition-all duration-500" style={{ width: `${item.percent}%` }} />
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-
-          {tab === "analisis" && (
-            <div className="p-0 sm:p-2">
-              <div className="mb-6">
-                <div className="text-[13px] font-semibold text-[#86868b] mb-2 uppercase tracking-wide">Tipo de Análisis</div>
-                <div className="flex gap-6">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="radio" checked={analisisTipo === "departamento"} onChange={() => setAnalisisTipo("departamento")} className="w-4 h-4 accent-[#007aff]" />
-                    <span className="text-[15px] text-[#1d1d1f]">Departamento</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="radio" checked={analisisTipo === "vendedora"} onChange={() => setAnalisisTipo("vendedora")} className="w-4 h-4 accent-[#007aff]" />
-                    <span className="text-[15px] text-[#1d1d1f]">Vendedora</span>
-                  </label>
-                </div>
-              </div>
-
-              <div className="mb-8">
-                <div className="text-[13px] font-semibold text-[#86868b] mb-2 uppercase tracking-wide">Seleccionar</div>
-                <select value={analisisItem} onChange={(e) => setAnalisisItem(e.target.value)} className="w-full p-3 text-[16px] border border-[#d1d1d6] rounded-xl bg-white outline-none focus:border-[#007aff]">
-                  {opcionesAnalisis.map((opt) => (
-                    <option key={opt} value={opt}>
-                      {opt}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {!analisisData ? (
-                <div className="p-5 text-center text-[#86868b]">No hay datos para este análisis.</div>
-              ) : (
-                <>
-                  <div className="bg-[#f5f5f7] rounded-2xl p-5 mb-5">
-                    <div className="text-[15px] font-semibold text-[#1d1d1f] mb-4">Evolución Mensual</div>
-                    <div className="h-[250px] w-full">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={analisisData.evo} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                          <defs>
-                            <linearGradient id="colorAnalisis" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="0%" stopColor="#007aff" stopOpacity={0.3} />
-                              <stop offset="100%" stopColor="#007aff" stopOpacity={0.05} />
-                            </linearGradient>
-                          </defs>
-                          <CartesianGrid vertical={false} stroke="#e5e5ea" />
-                          <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: "#86868b", fontSize: 13, fontWeight: "bold" }} dy={10} />
-                          <YAxis axisLine={false} tickLine={false} tick={{ fill: "#86868b", fontSize: 12 }} tickFormatter={(val) => `$${Math.round(val / 1000)}k`} />
-                          <Tooltip formatter={(val) => formatMoneda(val)} contentStyle={{ borderRadius: "8px", border: "none" }} />
-                          <Area type="monotone" dataKey="total" stroke="#007aff" strokeWidth={2.5} fill="url(#colorAnalisis)" activeDot={{ r: 5, fill: "#007aff", stroke: "#fff", strokeWidth: 2 }} />
-                        </AreaChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </div>
-
-                  <div className="bg-[#f5f5f7] rounded-2xl p-5">
-                    <div className="text-[15px] font-semibold text-[#1d1d1f] mb-4">📊 Métricas Clave</div>
-                    <div className="grid gap-3 text-[15px]">
-                      <div className="flex justify-between border-b border-[#e5e5ea] pb-2">
-                        <span className="text-[#86868b]">Promedio:</span>
-                        <span className="font-semibold text-[#1d1d1f]">{formatMoneda(analisisData.promedio)}</span>
-                      </div>
-                      <div className="flex justify-between border-b border-[#e5e5ea] pb-2">
-                        <span className="text-[#86868b]">Mejor mes:</span>
-                        <span className="font-semibold text-[#34c759]">{analisisData.maxMes} ({formatMoneda(analisisData.maxVal)})</span>
-                      </div>
-                      <div className="flex justify-between border-b border-[#e5e5ea] pb-2">
-                        <span className="text-[#86868b]">Peor mes:</span>
-                        <span className="font-semibold text-[#ff3b30]">{analisisData.minMes} ({formatMoneda(analisisData.minVal)})</span>
-                      </div>
-                      <div className="flex justify-between pt-1">
-                        <span className="text-[#86868b]">Tendencia Global:</span>
-                        <span className={`font-semibold ${analisisData.tendencia >= 0 ? "text-[#34c759]" : "text-[#ff3b30]"}`}>
-                          {analisisData.tendencia >= 0 ? "↑" : "↓"} {Math.abs(analisisData.tendencia).toFixed(1)}%
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-        </div>
       </div>
 
+      {/* scroll bar mobile */}
       <style
         dangerouslySetInnerHTML={{
           __html: `
-            .custom-scrollbar::-webkit-scrollbar { height: 0px; }
-            .custom-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-          `,
+          .custom-scrollbar::-webkit-scrollbar { height: 0px; }
+          .custom-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        `,
         }}
       />
+    </div>
+  );
+}
+
+function KpiCard({ label, value, isGrowth = false, growthVal = 0 }) {
+  return (
+    <div className="bg-white p-6 rounded-2xl shadow-[0_2px_8px_rgba(0,0,0,0.08)] flex flex-col justify-center">
+      <div className="text-[12px] text-[#86868b] uppercase tracking-wide font-semibold mb-2">
+        {label}
+      </div>
+      <div className="text-[32px] font-bold leading-none">{value}</div>
+
+      {isGrowth && growthVal !== null && (
+        <div className={`text-[14px] mt-2 font-semibold ${growthVal >= 0 ? "text-[#34c759]" : "text-[#ff3b30]"}`}>
+          {growthVal >= 0 ? "↑" : "↓"} {Math.abs(growthVal).toFixed(1)}% vs anterior
+        </div>
+      )}
+
+      {isGrowth && growthVal === null && (
+        <div className="text-[14px] mt-2 font-semibold text-[#86868b]">Sin mes anterior</div>
+      )}
     </div>
   );
 }

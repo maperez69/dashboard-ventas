@@ -1,4 +1,4 @@
-export const ENERO_2026_DATA = [
+export const enero2026Data = [
   {
     "mes": "Enero 2026",
     "sucursal": "Buenavista",
